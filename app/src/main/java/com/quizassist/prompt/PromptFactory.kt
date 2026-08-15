@@ -1,0 +1,57 @@
+package com.quizassist.prompt
+
+import com.quizassist.model.QuizInput
+
+object PromptFactory {
+    fun flashSystem(): String = """
+        \u4f60\u662f\u7b54\u9898\u6d3b\u52a8\u52a9\u624b\u3002\u6839\u636e OCR \u6587\u672c\u5224\u65ad\u9898\u76ee\u548c\u9009\u9879\uff0c\u65e0\u89c6\u5176\u4ed6\u65e0\u7528\u4fe1\u606f\uff0c\u53ea\u8f93\u51fa\u6700\u53ef\u80fd\u7b54\u6848\uff1b
+        \u5982\u679c\u662f\u9009\u62e9\u9898\uff0c\u4f18\u5148\u8f93\u51fa\u9009\u9879\u5b57\u6bcd\u548c\u5185\u5bb9\uff1b\u9644\u5e26\u4e0d\u8d85\u8fc715\u5b57\u7406\u7531\u3002
+        \u4e0d\u786e\u5b9a\u65f6\u8f93\u51fa\u201c\u65e0\u6cd5\u5224\u65ad\u201d\u3002
+        \u82e5OCR\u7ed3\u679c\u4e2d\u6ca1\u6709ABCD\uff0c\u5219\u4e0d\u8981\u663e\u793aABCD\u3002
+        \u4e25\u683c\u6309\u7167\uff1a
+        \u7b54\u6848
+        \u7406\u7531
+        \u7684\u683c\u5f0f\u8f93\u51fa\uff0c\u4e0d\u9700\u8981\u8f93\u51fa\u201c\u7b54\u6848\u201d\u548c\u201c\u7406\u7531\u201d\u8fd9\u4e24\u4e2a\u5b57\u3002
+        \u82e5\u9009\u9879\u4e2d\u6ca1\u6709\u6b63\u786e\u7b54\u6848\uff0c\u5219\u8f93\u51fa\u771f\u6b63\u7684\u6b63\u786e\u7b54\u6848\u3002
+    """.trimIndent()
+
+    fun deepSystem(enableSearchHint: Boolean, localAnswer: String? = null): String {
+        val search = if (enableSearchHint) {
+            "\u5df2\u542f\u7528\u8054\u7f51\u641c\u7d22\u65f6\uff0c\u5148\u6838\u9a8c ACG/\u624b\u6e38/\u52a8\u6f2b/\u6f2b\u753b/\u6e38\u620f\u4e13\u6709\u540d\u8bcd\u548c\u673a\u5236\u3002"
+        } else {
+            "\u4e0d\u8981\u7f16\u9020\u5916\u90e8\u6765\u6e90\uff0c\u53ea\u57fa\u4e8e\u9898\u9762\u3001\u56fe\u7247\u548c\u5df2\u6709\u77e5\u8bc6\u5224\u65ad\u3002"
+        }
+        val validation = localAnswer?.takeIf { it.isNotBlank() }?.let {
+            """
+            \u8fd9\u662f\u672c\u5730\u9898\u5e93\u5019\u9009\u7b54\u6848\uff1a$it
+            \u8bf7\u6838\u5bf9\u9898\u76ee\u548c\u9009\u9879\uff0c\u5224\u65ad\u5019\u9009\u7b54\u6848\u662f\u5426\u6b63\u786e\u3002
+            \u5fc5\u987b\u989d\u5916\u8fd4\u56de\u5e03\u5c14\u5b57\u6bb5 local_correct\uff1b\u6b63\u786e\u4e3a true\uff0c\u9519\u8bef\u4e3a false\u3002
+            \u5982\u679c local_correct \u4e3a false\uff0canswer \u5fc5\u987b\u586b\u5199\u4f60\u5224\u65ad\u7684\u6b63\u786e\u7b54\u6848\u3002
+            """.trimIndent()
+        }.orEmpty()
+        return """
+            \u4f60\u662f ACG \u4e0e\u7efc\u5408\u9898\u76ee\u4e13\u5bb6\u3002\u8bc6\u522b\u9898\u5e72\u548c\u9009\u9879\u540e\u7ed9\u51fa\u6700\u53ef\u80fd\u7b54\u6848\u3002
+            $search
+            $validation
+            \u4e0d\u8981\u8f93\u51fa\u957f\u63a8\u7406\uff0c\u4e0d\u8981\u8f93\u51fa\u6765\u6e90\u3002
+            \u4e25\u683c\u8fd4\u56de JSON\uff1a{"answer":"\u7b54\u6848","confidence":"0-100%","reasoning":"\u4e00\u53e5\u8bdd\u4f9d\u636e","local_correct":true}
+        """.trimIndent()
+    }
+
+    fun userPrompt(input: QuizInput, localAnswer: String? = null): String {
+        val ocrText = input.ocr?.text?.trim().orEmpty()
+        return buildString {
+            appendLine("OCR \u6587\u672c\u5982\u4e0b\uff1a")
+            if (ocrText.isNotBlank()) {
+                appendLine(ocrText)
+            } else {
+                appendLine("OCR \u4e0d\u53ef\u9760\uff0c\u8bf7\u6839\u636e\u622a\u56fe\u5185\u5bb9\u5224\u65ad\u3002")
+            }
+            localAnswer?.takeIf { it.isNotBlank() }?.let {
+                appendLine()
+                appendLine("\u672c\u5730\u9898\u5e93\u5019\u9009\u7b54\u6848\uff1a$it")
+                appendLine("\u8bf7\u6838\u5bf9\u8be5\u5019\u9009\u7b54\u6848\u662f\u5426\u6b63\u786e\uff0c\u5e76\u6309\u7cfb\u7edf\u8981\u6c42\u8fd4\u56de local_correct\u3002")
+            }
+        }.trim()
+    }
+}

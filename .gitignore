@@ -1,0 +1,31 @@
+# Gradle and Android build output
+.gradle/
+.app-build/
+**/build/
+.project-cache*/
+
+# Local Android SDK, toolchains, and build caches
+.android-sdk/
+.android-user/
+.gradle-home*/
+.home/
+.tmp/
+.tools/
+
+# IDE and machine-local configuration
+.idea/
+*.iml
+local.properties
+.DS_Store
+Thumbs.db
+
+# Native and generated tooling output
+.externalNativeBuild/
+.cxx/
+captures/
+
+# Packages and signing material
+*.apk
+*.aab
+*.keystore
+*.jks
