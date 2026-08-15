@@ -8,7 +8,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:label="&#23567;&#22810;&#31572;&#39064;&#21161;&#25163;"
         android:supportsRtl="true"
         android:theme="@style/Theme.QuizAssist">

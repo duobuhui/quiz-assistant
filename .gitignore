@@ -29,3 +29,4 @@ captures/
 *.aab
 *.keystore
 *.jks
+signing.properties

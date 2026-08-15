@@ -1,15 +1,31 @@
 package com.quizassist.settings
 
 import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
 import com.quizassist.model.AppSettings
 import com.quizassist.model.ProviderConfig
 import com.quizassist.model.RoiBox
+import java.nio.ByteBuffer
+import java.security.KeyStore
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class SettingsStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("quiz_assist_settings_v2", Context.MODE_PRIVATE)
+    private val keyCipher = ApiKeyCipher()
+
+    init {
+        migratePlaintextApiKeys()
+    }
+
     private val state = MutableStateFlow(load())
 
     val settings: Flow<AppSettings> = state.asStateFlow()
@@ -19,15 +35,17 @@ class SettingsStore(context: Context) {
     }
 
     suspend fun save(next: AppSettings) {
+        validateBaseUrl(next.flashProvider.baseUrl)
+        validateBaseUrl(next.deepProvider.baseUrl)
         val ok = prefs.edit()
             .putString(Keys.flashBaseUrl, next.flashProvider.baseUrl)
-            .putString(Keys.flashApiKey, next.flashProvider.apiKey)
+            .putString(Keys.flashApiKey, keyCipher.encrypt(next.flashProvider.apiKey))
             .putString(Keys.flashModel, next.flashProvider.modelName)
             .putString(Keys.flashTemperature, next.flashProvider.temperature.toString())
             .putString(Keys.flashSearch, next.flashProvider.enableSearchHint.toString())
             .putString(Keys.flashReasoning, next.flashProvider.reasoningEffort)
             .putString(Keys.deepBaseUrl, next.deepProvider.baseUrl)
-            .putString(Keys.deepApiKey, next.deepProvider.apiKey)
+            .putString(Keys.deepApiKey, keyCipher.encrypt(next.deepProvider.apiKey))
             .putString(Keys.deepModel, next.deepProvider.modelName)
             .putString(Keys.deepTemperature, next.deepProvider.temperature.toString())
             .putString(Keys.deepSearch, next.deepProvider.enableSearchHint.toString())
@@ -60,7 +78,7 @@ class SettingsStore(context: Context) {
         return default.copy(
             flashProvider = ProviderConfig(
                 baseUrl = prefs.readString(Keys.flashBaseUrl, default.flashProvider.baseUrl),
-                apiKey = prefs.readString(Keys.flashApiKey, default.flashProvider.apiKey),
+                apiKey = readApiKey(Keys.flashApiKey, default.flashProvider.apiKey),
                 modelName = prefs.readString(Keys.flashModel, default.flashProvider.modelName),
                 temperature = prefs.readDouble(Keys.flashTemperature, default.flashProvider.temperature),
                 enableSearchHint = prefs.readBoolean(Keys.flashSearch, default.flashProvider.enableSearchHint),
@@ -68,7 +86,7 @@ class SettingsStore(context: Context) {
             ),
             deepProvider = ProviderConfig(
                 baseUrl = prefs.readString(Keys.deepBaseUrl, default.deepProvider.baseUrl),
-                apiKey = prefs.readString(Keys.deepApiKey, default.deepProvider.apiKey),
+                apiKey = readApiKey(Keys.deepApiKey, default.deepProvider.apiKey),
                 modelName = prefs.readString(Keys.deepModel, default.deepProvider.modelName),
                 temperature = prefs.readDouble(Keys.deepTemperature, default.deepProvider.temperature),
                 enableSearchHint = prefs.readBoolean(Keys.deepSearch, default.deepProvider.enableSearchHint),
@@ -83,6 +101,31 @@ class SettingsStore(context: Context) {
             questionBankMode = prefs.readBoolean(Keys.questionBankMode, default.questionBankMode),
             roi = roi,
         )
+    }
+
+    private fun readApiKey(key: String, default: String): String =
+        prefs.readString(key, default).let { stored ->
+            if (stored.startsWith(ApiKeyCipher.PREFIX)) {
+                keyCipher.decrypt(stored).orEmpty()
+            } else {
+                stored
+            }
+        }
+
+    private fun migratePlaintextApiKeys() {
+        listOf(Keys.flashApiKey, Keys.deepApiKey).forEach { key ->
+            val stored = prefs.getString(key, null).orEmpty()
+            if (stored.isNotBlank() && !stored.startsWith(ApiKeyCipher.PREFIX)) {
+                prefs.edit().putString(key, keyCipher.encrypt(stored)).commit()
+            }
+        }
+    }
+
+    private fun validateBaseUrl(value: String) {
+        val normalized = value.trim()
+        if (normalized.isNotBlank() && !normalized.startsWith("https://", ignoreCase = true)) {
+            error("接口地址必须使用 HTTPS")
+        }
     }
 
     private fun android.content.SharedPreferences.Editor.applyRoi(roi: RoiBox?): android.content.SharedPreferences.Editor =
@@ -141,5 +184,52 @@ class SettingsStore(context: Context) {
     private companion object {
         const val MIN_WAIT_SECONDS = 5
         const val MAX_WAIT_SECONDS = 180
+    }
+}
+
+private class ApiKeyCipher {
+    fun encrypt(value: String): String {
+        if (value.isBlank()) return ""
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        val iv = ByteArray(IV_SIZE).also(SecureRandom()::nextBytes)
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
+        val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+        val payload = ByteBuffer.allocate(iv.size + encrypted.size).put(iv).put(encrypted).array()
+        return PREFIX + Base64.encodeToString(payload, Base64.NO_WRAP)
+    }
+
+    fun decrypt(value: String): String? = runCatching {
+        val payload = Base64.decode(value.removePrefix(PREFIX), Base64.NO_WRAP)
+        val iv = payload.copyOfRange(0, IV_SIZE)
+        val encrypted = payload.copyOfRange(IV_SIZE, payload.size)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
+        cipher.doFinal(encrypted).toString(Charsets.UTF_8)
+    }.getOrNull()
+
+    private fun secretKey(): SecretKey {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build(),
+        )
+        return generator.generateKey()
+    }
+
+    companion object {
+        const val PREFIX = "enc:v1:"
+        private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+        private const val KEY_ALIAS = "quiz_assist_api_key"
+        private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val IV_SIZE = 12
+        private const val TAG_BITS = 128
     }
 }
