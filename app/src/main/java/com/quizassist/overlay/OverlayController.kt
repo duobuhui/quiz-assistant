@@ -258,6 +258,7 @@ object OverlayController {
             )
             is SolveEvent.DeepFailure -> snapshot.copy(
                 state = if (snapshot.flashText.isNotBlank()) OverlayState.FlashReady else OverlayState.Error,
+                deepText = snapshot.deepText.ifBlank { "未返回最终答案" },
                 notice = "\u6df1\u5ea6\u6a21\u578b\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u5df2\u4fdd\u7559\u5feb\u901f\u7b54\u6848\uff1a${event.message}",
             )
             is SolveEvent.Failure -> snapshot.copy(state = OverlayState.Error, notice = event.message)

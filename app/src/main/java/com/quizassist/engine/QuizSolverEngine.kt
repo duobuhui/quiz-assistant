@@ -89,6 +89,10 @@ class QuizSolverEngine(
                             return@launch
                         }
                         val validation = llmRepository.parseStructuredAnswer(raw.toString())
+                        if (!validation.hasAnswer) {
+                            send(SolveEvent.DeepFailure("深度模型未返回最终答案，保留本地题库答案"))
+                            return@launch
+                        }
                         send(SolveEvent.QuestionBankValidation(validation, validationElapsed))
                         if (validation.localCorrect == false && validation.answer.isNotBlank()) {
                             answerCache.save(input.cacheKey, input.ocr?.text.orEmpty(), validation)
@@ -142,6 +146,10 @@ class QuizSolverEngine(
                     }
                 }
                 val answer = llmRepository.parseStructuredAnswer(raw.toString())
+                if (!answer.hasAnswer) {
+                    send(SolveEvent.DeepFailure("深度模型未返回最终答案"))
+                    return@async null
+                }
                 send(SolveEvent.DeepAnswer(answer, elapsed))
                 answerCache.save(input.cacheKey, questionText, answer)
                 answer

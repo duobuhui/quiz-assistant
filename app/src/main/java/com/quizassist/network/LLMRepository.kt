@@ -51,10 +51,10 @@ class LLMRepository(
         val useResponsesSearch = deep && provider.enableSearchHint
         val requests = if (useResponsesSearch) {
             listOf(buildResponsesRequest(provider, input, localAnswer))
-        } else if (!deep && provider.modelName.isDeepSeekModel()) {
+        } else if (provider.modelName.isDeepSeekModel()) {
             listOf(
-                buildChatRequest(provider, input, deep = false, disableThinking = true, localAnswer = localAnswer),
-                buildChatRequest(provider, input, deep = false, disableThinking = false, localAnswer = localAnswer),
+                buildChatRequest(provider, input, deep, disableThinking = true, localAnswer = localAnswer),
+                buildChatRequest(provider, input, deep, disableThinking = false, localAnswer = localAnswer),
             )
         } else {
             listOf(buildChatRequest(provider, input, deep, localAnswer = localAnswer))
@@ -68,11 +68,15 @@ class LLMRepository(
                     val full = executeBlockingRequest(request, timeoutSeconds = FLASH_TIMEOUT_SECONDS)
                     if (full.isNotBlank()) emit(full)
                 } else {
-                    executeStreamingRequest(request, responsesMode = useResponsesSearch) { token -> emit(token) }
+                    val emitted = executeStreamingRequest(request, responsesMode = useResponsesSearch) { token -> emit(token) }
+                    if (!emitted && requestIndex < requests.lastIndex) {
+                        requestIndex++
+                        continue
+                    }
                 }
                 return@flow
             } catch (t: Throwable) {
-                if (!deep && requestIndex == 0 && requests.size > 1 && t.isUnsupportedThinkingParameter()) {
+                if (requestIndex == 0 && requests.size > 1 && t.isUnsupportedThinkingParameter()) {
                     requestIndex++
                     continue
                 }
@@ -112,7 +116,7 @@ class LLMRepository(
         request: Request,
         responsesMode: Boolean,
         onToken: (String) -> Unit,
-    ) {
+    ): Boolean {
         client.newCall(request).execute().use { response ->
             val body = response.body ?: error("LLM response body is empty.")
             if (!response.isSuccessful) {
@@ -125,6 +129,8 @@ class LLMRepository(
             body.source().use { source ->
                 var emittedResponsesTextLength = 0
                 val plainBody = StringBuilder()
+                val hiddenReasoning = StringBuilder()
+                var emittedAnswerText = false
                 var sawSseData = false
                 while (!source.exhausted()) {
                     val line = source.readUtf8Line() ?: continue
@@ -137,24 +143,45 @@ class LLMRepository(
                     if (data.isBlank()) continue
                     if (data == "[DONE]") break
                     if (responsesMode) {
+                        hiddenReasoning.append(parseResponsesReasoning(data))
                         val token = parseResponsesToken(data, emittedResponsesTextLength)
                         if (token.isNotEmpty()) {
                             emittedResponsesTextLength += token.length
+                            emittedAnswerText = true
                             onToken(token)
                         }
                     } else {
-                        val token = parseChatToken(data)
-                        if (token.isNotEmpty()) onToken(token)
+                        val parts = parseChatParts(data)
+                        hiddenReasoning.append(parts.reasoning)
+                        if (parts.content.isNotEmpty()) {
+                            emittedAnswerText = true
+                            onToken(parts.content)
+                        }
                     }
                 }
                 if (!sawSseData) {
-                    val token = if (responsesMode) {
-                        parseResponsesToken(plainBody.toString(), emittedResponsesTextLength)
+                    if (responsesMode) {
+                        hiddenReasoning.append(parseResponsesReasoning(plainBody.toString()))
+                        val token = parseResponsesToken(plainBody.toString(), emittedResponsesTextLength)
+                        if (token.isNotEmpty()) {
+                            emittedAnswerText = true
+                            onToken(token)
+                        }
                     } else {
-                        parseChatToken(plainBody.toString())
+                        val parts = parseChatParts(plainBody.toString())
+                        hiddenReasoning.append(parts.reasoning)
+                        if (parts.content.isNotEmpty()) {
+                            emittedAnswerText = true
+                            onToken(parts.content)
+                        }
                     }
-                    if (token.isNotEmpty()) onToken(token)
                 }
+                if (!emittedAnswerText) {
+                    extractAnswerJson(hiddenReasoning.toString())
+                        .takeIf { it.isNotBlank() }
+                        ?.let(onToken)
+                }
+                return emittedAnswerText || extractAnswerJson(hiddenReasoning.toString()).isNotBlank()
             }
         }
     }
@@ -206,9 +233,9 @@ class LLMRepository(
             messages = messages,
             temperature = provider.temperature,
             stream = deep,
-            reasoningEffort = if (deep) provider.reasoningEffort.trim().takeIf { it.isNotBlank() } else null,
-            maxTokens = if (deep) 512 else 64,
-            thinking = if (!deep && disableThinking) {
+            reasoningEffort = if (deep && !disableThinking) provider.reasoningEffort.trim().takeIf { it.isNotBlank() } else null,
+            maxTokens = if (deep) 2048 else 64,
+            thinking = if (disableThinking) {
                 ThinkingConfig(type = "disabled")
             } else {
                 null
@@ -235,7 +262,7 @@ class LLMRepository(
             tools = listOf(ResponseTool(type = "web_search")),
             reasoning = reasoningEffort?.let { ResponseReasoning(effort = it) },
             stream = true,
-            maxOutputTokens = 512,
+            maxOutputTokens = 2048,
         )
         return jsonPost(endpoint, provider.apiKey, json.encodeToString(payload))
     }
@@ -282,37 +309,40 @@ class LLMRepository(
             appendLine("注意：本次联网请求只发送文本，不附带截图；如果 OCR 不完整，请基于可识别文字进行保守判断，并降低置信度。")
         }.trim()
 
-    private fun parseChatToken(data: String): String =
+    private fun parseChatToken(data: String): String = parseChatParts(data).content
+
+    private fun parseChatParts(data: String): ChatParts =
         runCatching {
-            val element = json.parseToJsonElement(data)
-            extractChatText(element)
-        }.getOrDefault("")
+            extractChatParts(json.parseToJsonElement(data))
+        }.getOrDefault(ChatParts())
 
     private fun parseChatContent(data: String): String =
         runCatching {
             val element = json.parseToJsonElement(data)
-            extractChatText(element)
+            extractChatParts(element).content
         }.getOrDefault("")
 
-    private fun extractChatText(element: JsonElement): String {
+    private fun extractChatParts(element: JsonElement): ChatParts {
         val obj = element.jsonObjectOrNull()
         if (obj != null) {
             val choices = obj["choices"]?.jsonArrayOrNull()
             if (!choices.isNullOrEmpty()) {
                 choices.forEach { choice ->
                     val choiceObj = choice.jsonObjectOrNull() ?: return@forEach
-                    val delta = choiceObj["delta"]?.extractAssistantText()
-                    if (!delta.isNullOrBlank()) return delta
-                    val message = choiceObj["message"]?.extractAssistantText()
-                    if (!message.isNullOrBlank()) return message
+                    val delta = choiceObj["delta"]?.extractAssistantParts()
+                    if (delta != null && (delta.content.isNotBlank() || delta.reasoning.isNotBlank())) return delta
+                    val message = choiceObj["message"]?.extractAssistantParts()
+                    if (message != null && (message.content.isNotBlank() || message.reasoning.isNotBlank())) return message
                     val text = choiceObj["text"]?.jsonPrimitiveOrNull()
-                    if (!text.isNullOrBlank()) return text
+                    if (!text.isNullOrBlank()) return ChatParts(content = text)
                 }
             }
-            val direct = element.extractTopLevelText()
-            if (!direct.isNullOrBlank()) return direct
+            return ChatParts(
+                content = element.extractTopLevelText().orEmpty(),
+                reasoning = obj["reasoning_content"]?.jsonPrimitiveOrNull().orEmpty(),
+            )
         }
-        return ""
+        return ChatParts()
     }
 
     private fun parseResponsesToken(data: String, emittedLength: Int): String =
@@ -324,7 +354,11 @@ class LLMRepository(
                 "response.output_text.done", "response.refusal.done" ->
                     event.text.orEmpty().missingSuffixAfter(emittedLength)
                 "response.content_part.done" ->
-                    event.part?.text.orEmpty().missingSuffixAfter(emittedLength)
+                    event.part
+                        ?.takeIf { it.type == "output_text" || it.type == "refusal" }
+                        ?.text
+                        .orEmpty()
+                        .missingSuffixAfter(emittedLength)
                 "response.output_item.done" ->
                     event.item?.outputText().orEmpty().missingSuffixAfter(emittedLength)
                 "response.completed" ->
@@ -333,8 +367,37 @@ class LLMRepository(
             }
         }.getOrDefault("")
 
+    private fun parseResponsesReasoning(data: String): String =
+        runCatching {
+            val event = json.decodeFromString(ResponseStreamEvent.serializer(), data)
+            when (event.type) {
+                "response.reasoning_summary_text.delta",
+                "response.reasoning_text.delta",
+                "response.reasoning_content.delta" -> event.delta.orEmpty()
+                else -> ""
+            }
+        }.getOrDefault("")
+
+    private fun extractAnswerJson(raw: String): String {
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) return ""
+        val candidate = raw.substring(start, end + 1)
+        return runCatching {
+            val jsonObject = json.parseToJsonElement(candidate).jsonObject
+            candidate.takeIf { jsonObject["answer"] != null }.orEmpty()
+        }.getOrDefault("")
+    }
+
     private fun ResponseOutputItem.outputText(): String =
-        content.mapNotNull { it.text }.joinToString("")
+        if (type == null || type == "message") {
+            content
+                .filter { it.type == "output_text" || it.type == "refusal" }
+                .mapNotNull { it.text }
+                .joinToString("")
+        } else {
+            ""
+        }
 
     private fun ResponseCompleted.outputText(): String =
         outputText ?: output.joinToString("") { it.outputText() }
@@ -348,8 +411,8 @@ class LLMRepository(
     private fun JsonElement.toBooleanValue(): Boolean? =
         jsonPrimitive.booleanOrNull ?: toText().toBooleanStrictOrNull()
 
-    private fun JsonElement.extractAssistantText(): String? {
-        val obj = jsonObjectOrNull() ?: return jsonPrimitiveOrNull()
+    private fun JsonElement.extractAssistantParts(): ChatParts {
+        val obj = jsonObjectOrNull() ?: return ChatParts(content = jsonPrimitiveOrNull().orEmpty())
         val keys = listOf(
             "content",
             "text",
@@ -357,13 +420,17 @@ class LLMRepository(
             "answer",
             "delta",
         )
-        keys.forEach { key ->
-            val value = obj[key]
-            val text = value?.jsonPrimitiveOrNull()
-            if (!text.isNullOrBlank()) return text
-        }
-        return null
+        val content = keys.firstNotNullOfOrNull { obj[it]?.jsonPrimitiveOrNull()?.takeIf(String::isNotBlank) }.orEmpty()
+        val reasoning = listOf("reasoning_content", "reasoning", "thinking")
+            .firstNotNullOfOrNull { obj[it]?.jsonPrimitiveOrNull()?.takeIf(String::isNotBlank) }
+            .orEmpty()
+        return ChatParts(content = content, reasoning = reasoning)
     }
+
+    private data class ChatParts(
+        val content: String = "",
+        val reasoning: String = "",
+    )
 
     private fun JsonElement.extractTopLevelText(): String? {
         val obj = jsonObjectOrNull() ?: return null

@@ -95,6 +95,7 @@ data class ResponseCompleted(
 
 @Serializable
 data class ResponseOutputItem(
+    val type: String? = null,
     val content: List<ResponseOutputContent> = emptyList(),
 )
 
