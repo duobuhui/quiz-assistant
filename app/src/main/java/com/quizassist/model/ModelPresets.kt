@@ -8,10 +8,10 @@ data class ModelPreset(
 object ModelPresets {
     val flash: List<ModelPreset> = listOf(
         ModelPreset(
-            label = "dsv4flash",
+            label = "deepseek-v4-flash",
             provider = ProviderConfig(
                 baseUrl = "https://api.deepseek.com/v1/",
-                modelName = "dsv4flash",
+                modelName = "deepseek-v4-flash",
                 temperature = 0.0,
             ),
         ),
@@ -23,10 +23,10 @@ object ModelPresets {
 
     val deep: List<ModelPreset> = listOf(
         ModelPreset(
-            label = "gpt5.6luna",
+            label = "gpt-5.6-luna",
             provider = ProviderConfig(
                 baseUrl = "https://your-api-proxy.com/v1/",
-                modelName = "gpt5.6luna",
+                modelName = "gpt-5.6-luna",
                 temperature = 0.1,
                 enableSearchHint = true,
                 reasoningEffort = "max",

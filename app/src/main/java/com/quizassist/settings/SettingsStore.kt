@@ -9,7 +9,6 @@ import com.quizassist.model.ProviderConfig
 import com.quizassist.model.RoiBox
 import java.nio.ByteBuffer
 import java.security.KeyStore
-import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -191,8 +190,8 @@ private class ApiKeyCipher {
     fun encrypt(value: String): String {
         if (value.isBlank()) return ""
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        val iv = ByteArray(IV_SIZE).also(SecureRandom()::nextBytes)
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
+        val iv = cipher.iv
         val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
         val payload = ByteBuffer.allocate(iv.size + encrypted.size).put(iv).put(encrypted).array()
         return PREFIX + Base64.encodeToString(payload, Base64.NO_WRAP)

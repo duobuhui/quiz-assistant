@@ -291,22 +291,19 @@ class LLMRepository(
     private fun parseChatContent(data: String): String =
         runCatching {
             val element = json.parseToJsonElement(data)
-            extractChatText(element, allowReasoningFallback = false)
+            extractChatText(element)
         }.getOrDefault("")
 
-    private fun extractChatText(
-        element: JsonElement,
-        allowReasoningFallback: Boolean = true,
-    ): String {
+    private fun extractChatText(element: JsonElement): String {
         val obj = element.jsonObjectOrNull()
         if (obj != null) {
             val choices = obj["choices"]?.jsonArrayOrNull()
             if (!choices.isNullOrEmpty()) {
                 choices.forEach { choice ->
                     val choiceObj = choice.jsonObjectOrNull() ?: return@forEach
-                    val delta = choiceObj["delta"]?.extractAssistantText(allowReasoningFallback)
+                    val delta = choiceObj["delta"]?.extractAssistantText()
                     if (!delta.isNullOrBlank()) return delta
-                    val message = choiceObj["message"]?.extractAssistantText(allowReasoningFallback)
+                    val message = choiceObj["message"]?.extractAssistantText()
                     if (!message.isNullOrBlank()) return message
                     val text = choiceObj["text"]?.jsonPrimitiveOrNull()
                     if (!text.isNullOrBlank()) return text
@@ -332,9 +329,7 @@ class LLMRepository(
                     event.item?.outputText().orEmpty().missingSuffixAfter(emittedLength)
                 "response.completed" ->
                     event.response?.outputText().orEmpty().missingSuffixAfter(emittedLength)
-                else -> event.delta.orEmpty()
-                    .ifBlank { event.text.orEmpty() }
-                    .ifBlank { event.response?.outputText().orEmpty() }
+                else -> ""
             }
         }.getOrDefault("")
 
@@ -353,18 +348,15 @@ class LLMRepository(
     private fun JsonElement.toBooleanValue(): Boolean? =
         jsonPrimitive.booleanOrNull ?: toText().toBooleanStrictOrNull()
 
-    private fun JsonElement.extractAssistantText(allowReasoningFallback: Boolean): String? {
+    private fun JsonElement.extractAssistantText(): String? {
         val obj = jsonObjectOrNull() ?: return jsonPrimitiveOrNull()
-        val keys = buildList {
-            addAll(listOf(
+        val keys = listOf(
             "content",
             "text",
             "output_text",
             "answer",
             "delta",
-            ))
-            if (allowReasoningFallback) add("reasoning_content")
-        }
+        )
         keys.forEach { key ->
             val value = obj[key]
             val text = value?.jsonPrimitiveOrNull()
