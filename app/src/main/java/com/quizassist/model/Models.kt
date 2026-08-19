@@ -9,6 +9,12 @@ data class ProviderConfig(
     val temperature: Double = 0.1,
     val enableSearchHint: Boolean = false,
     val reasoningEffort: String = "",
+    val apiKeyHeader: String = "Authorization",
+)
+
+data class SavedModel(
+    val name: String,
+    val provider: ProviderConfig,
 )
 
 data class AppSettings(

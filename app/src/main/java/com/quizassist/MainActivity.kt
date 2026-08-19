@@ -62,10 +62,12 @@ import com.quizassist.model.ModelPreset
 import com.quizassist.model.ModelPresets
 import com.quizassist.model.ProviderConfig
 import com.quizassist.model.RoiBox
+import com.quizassist.model.SavedModel
 import com.quizassist.overlay.OverlayController
 import com.quizassist.overlay.ProjectionPermissionStore
 import com.quizassist.questionbank.QuestionBankStore
 import com.quizassist.settings.SettingsStore
+import com.quizassist.settings.SavedModelStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -186,6 +188,9 @@ private fun SettingsScreen(
     var showHistory by remember { mutableStateOf(false) }
     val answerCache = remember(context) { AnswerCache(context) }
     val questionBankStore = remember(context) { QuestionBankStore(context) }
+    val savedModelStore = remember(context) { SavedModelStore(context) }
+    var savedFlashModels by remember { mutableStateOf(savedModelStore.list(SLOT_FLASH)) }
+    var savedDeepModels by remember { mutableStateOf(savedModelStore.list(SLOT_DEEP)) }
     var bankInfo by remember(importMessage) { mutableStateOf(questionBankStore.info()) }
 
     LaunchedEffect(Unit) {
@@ -211,11 +216,37 @@ private fun SettingsScreen(
         }
 
         SectionCard(Zh.modelSection, Zh.modelSectionHint) {
-            ProviderEditor(Zh.flashTitle, ModelPresets.flash, draft.flashProvider) {
+            ProviderEditor(
+                title = Zh.flashTitle,
+                presets = ModelPresets.flash,
+                provider = draft.flashProvider,
+                savedModels = savedFlashModels,
+                onSaveModel = { provider ->
+                    runCatching { savedModelStore.save(SLOT_FLASH, provider.modelName, provider) }
+                        .onSuccess {
+                            savedFlashModels = savedModelStore.list(SLOT_FLASH)
+                            saveMessage = Zh.modelSaved
+                        }
+                        .onFailure { saveMessage = "${Zh.saveFailed}: ${it.message.orEmpty()}" }
+                },
+            ) {
                 draft = draft.copy(flashProvider = it)
             }
             HorizontalDivider()
-            ProviderEditor(Zh.deepTitle, ModelPresets.deep, draft.deepProvider) {
+            ProviderEditor(
+                title = Zh.deepTitle,
+                presets = ModelPresets.deep,
+                provider = draft.deepProvider,
+                savedModels = savedDeepModels,
+                onSaveModel = { provider ->
+                    runCatching { savedModelStore.save(SLOT_DEEP, provider.modelName, provider) }
+                        .onSuccess {
+                            savedDeepModels = savedModelStore.list(SLOT_DEEP)
+                            saveMessage = Zh.modelSaved
+                        }
+                        .onFailure { saveMessage = "${Zh.saveFailed}: ${it.message.orEmpty()}" }
+                },
+            ) {
                 draft = draft.copy(deepProvider = it)
             }
         }
@@ -284,7 +315,10 @@ private fun SettingsScreen(
                 onClick = {
                     scope.launch {
                         runCatching { store.save(draft) }
-                            .onSuccess { saveMessage = Zh.saved }
+                            .onSuccess {
+                                OverlayController.reloadSettings()
+                                saveMessage = Zh.saved
+                            }
                             .onFailure { saveMessage = "${Zh.saveFailed}: ${it.message.orEmpty()}" }
                     }
                 },
@@ -334,14 +368,25 @@ private fun ProviderEditor(
     title: String,
     presets: List<ModelPreset>,
     provider: ProviderConfig,
+    savedModels: List<SavedModel>,
+    onSaveModel: (ProviderConfig) -> Unit,
     onChange: (ProviderConfig) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var savedExpanded by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { expanded = true }) { Text(Zh.choosePreset) }
+                OutlinedButton(onClick = { savedExpanded = true }, enabled = savedModels.isNotEmpty()) { Text(Zh.savedModels) }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onSaveModel(provider) }) { Text(Zh.saveModel) }
+                Text(provider.modelName.ifBlank { Zh.notConfigured }, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { expanded = true }) { Text(Zh.choosePreset) }
-            Text(provider.modelName.ifBlank { Zh.notConfigured }, style = MaterialTheme.typography.bodyMedium)
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 presets.forEach { preset ->
                     DropdownMenuItem(
@@ -349,6 +394,17 @@ private fun ProviderEditor(
                         onClick = {
                             expanded = false
                             onChange(preset.provider.copy(apiKey = provider.apiKey))
+                        },
+                    )
+                }
+            }
+            DropdownMenu(expanded = savedExpanded, onDismissRequest = { savedExpanded = false }) {
+                savedModels.forEach { saved ->
+                    DropdownMenuItem(
+                        text = { Text(saved.name) },
+                        onClick = {
+                            savedExpanded = false
+                            onChange(saved.provider)
                         },
                     )
                 }
@@ -475,6 +531,9 @@ private object Zh {
     const val baseUrl = "\u63a5\u53e3\u5730\u5740"
     const val modelName = "\u6a21\u578b\u540d\u79f0"
     const val choosePreset = "\u9884\u8bbe"
+    const val savedModels = "\u5df2\u4fdd\u5b58"
+    const val saveModel = "\u4fdd\u5b58\u6a21\u578b"
+    const val modelSaved = "\u6a21\u578b\u5df2\u4fdd\u5b58"
     const val notConfigured = "\u672a\u914d\u7f6e"
     const val history = "\u7b54\u9898\u8bb0\u5f55"
     const val historyEmpty = "\u6682\u65e0\u8bb0\u5f55"
@@ -497,3 +556,6 @@ private object Zh {
     const val captureLaunchFailed = "\u542f\u52a8\u622a\u56fe\u6388\u6743\u5931\u8d25"
     const val captureSessionFailed = "\u622a\u56fe\u4f1a\u8bdd\u542f\u52a8\u5931\u8d25"
 }
+
+private const val SLOT_FLASH = "flash"
+private const val SLOT_DEEP = "deep"

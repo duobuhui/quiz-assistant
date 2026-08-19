@@ -23,11 +23,16 @@ class SettingsStore(context: Context) {
 
     init {
         migratePlaintextApiKeys()
+        migrateLegacyFlashPreset()
     }
 
     private val state = MutableStateFlow(load())
 
     val settings: Flow<AppSettings> = state.asStateFlow()
+
+    fun refresh() {
+        state.value = load()
+    }
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
         save(transform(state.value))
@@ -43,12 +48,14 @@ class SettingsStore(context: Context) {
             .putString(Keys.flashTemperature, next.flashProvider.temperature.toString())
             .putString(Keys.flashSearch, next.flashProvider.enableSearchHint.toString())
             .putString(Keys.flashReasoning, next.flashProvider.reasoningEffort)
+            .putString(Keys.flashApiKeyHeader, next.flashProvider.apiKeyHeader)
             .putString(Keys.deepBaseUrl, next.deepProvider.baseUrl)
             .putString(Keys.deepApiKey, keyCipher.encrypt(next.deepProvider.apiKey))
             .putString(Keys.deepModel, next.deepProvider.modelName)
             .putString(Keys.deepTemperature, next.deepProvider.temperature.toString())
             .putString(Keys.deepSearch, next.deepProvider.enableSearchHint.toString())
             .putString(Keys.deepReasoning, next.deepProvider.reasoningEffort)
+            .putString(Keys.deepApiKeyHeader, next.deepProvider.apiKeyHeader)
             .putString(Keys.maxWait, next.maxWaitTimeoutSeconds.coerceIn(MIN_WAIT_SECONDS, MAX_WAIT_SECONDS).toString())
             .putString(Keys.useVision, next.useVisionWhenOcrWeak.toString())
             .putString(Keys.showPreview, next.showImagePreview.toString())
@@ -82,6 +89,7 @@ class SettingsStore(context: Context) {
                 temperature = prefs.readDouble(Keys.flashTemperature, default.flashProvider.temperature),
                 enableSearchHint = prefs.readBoolean(Keys.flashSearch, default.flashProvider.enableSearchHint),
                 reasoningEffort = prefs.readString(Keys.flashReasoning, default.flashProvider.reasoningEffort),
+                apiKeyHeader = prefs.readString(Keys.flashApiKeyHeader, default.flashProvider.apiKeyHeader),
             ),
             deepProvider = ProviderConfig(
                 baseUrl = prefs.readString(Keys.deepBaseUrl, default.deepProvider.baseUrl),
@@ -90,6 +98,7 @@ class SettingsStore(context: Context) {
                 temperature = prefs.readDouble(Keys.deepTemperature, default.deepProvider.temperature),
                 enableSearchHint = prefs.readBoolean(Keys.deepSearch, default.deepProvider.enableSearchHint),
                 reasoningEffort = prefs.readString(Keys.deepReasoning, default.deepProvider.reasoningEffort),
+                apiKeyHeader = prefs.readString(Keys.deepApiKeyHeader, default.deepProvider.apiKeyHeader),
             ),
             maxWaitTimeoutSeconds = prefs.readInt(Keys.maxWait, default.maxWaitTimeoutSeconds)
                 .coerceIn(MIN_WAIT_SECONDS, MAX_WAIT_SECONDS),
@@ -117,6 +126,18 @@ class SettingsStore(context: Context) {
             if (stored.isNotBlank() && !stored.startsWith(ApiKeyCipher.PREFIX)) {
                 prefs.edit().putString(key, keyCipher.encrypt(stored)).commit()
             }
+        }
+    }
+
+    private fun migrateLegacyFlashPreset() {
+        val oldModel = prefs.getString(Keys.flashModel, null)
+        val oldBaseUrl = prefs.getString(Keys.flashBaseUrl, null)
+        if (oldModel == "deepseek-v4-flash" && oldBaseUrl?.contains("api.deepseek.com") == true) {
+            prefs.edit()
+                .putString(Keys.flashBaseUrl, "https://note3-prev-api.askdiandian.com/v1/")
+                .putString(Keys.flashModel, "dots3-note-prev")
+                .putString(Keys.flashApiKeyHeader, "api-key")
+                .commit()
         }
     }
 
@@ -162,12 +183,14 @@ class SettingsStore(context: Context) {
         const val flashTemperature = "flash_temperature"
         const val flashSearch = "flash_search"
         const val flashReasoning = "flash_reasoning"
+        const val flashApiKeyHeader = "flash_api_key_header"
         const val deepBaseUrl = "deep_base_url"
         const val deepApiKey = "deep_api_key"
         const val deepModel = "deep_model"
         const val deepTemperature = "deep_temperature"
         const val deepSearch = "deep_search"
         const val deepReasoning = "deep_reasoning"
+        const val deepApiKeyHeader = "deep_api_key_header"
         const val maxWait = "max_wait"
         const val useVision = "use_vision"
         const val showPreview = "show_preview"
@@ -186,7 +209,7 @@ class SettingsStore(context: Context) {
     }
 }
 
-private class ApiKeyCipher {
+internal class ApiKeyCipher {
     fun encrypt(value: String): String {
         if (value.isBlank()) return ""
         val cipher = Cipher.getInstance(TRANSFORMATION)

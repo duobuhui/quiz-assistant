@@ -98,6 +98,11 @@ object OverlayController {
         snapshot = SolveSnapshot()
     }
 
+    fun reloadSettings() {
+        settingsStore?.refresh()
+        updateOverlayFlags()
+    }
+
     private fun captureAndSolve() {
         val context = appContext ?: return
         val overlay = renderer ?: return
@@ -158,6 +163,7 @@ object OverlayController {
         overlay.root.visibility = View.VISIBLE
         solveJob?.cancel()
         solveJob = scope.launch {
+            store.refresh()
             val settings = store.settings.first()
             snapshot = snapshot.copy(
                 state = OverlayState.Recognizing,

@@ -8,11 +8,12 @@ data class ModelPreset(
 object ModelPresets {
     val flash: List<ModelPreset> = listOf(
         ModelPreset(
-            label = "deepseek-v4-flash",
+            label = "dots3-note-prev",
             provider = ProviderConfig(
-                baseUrl = "https://api.deepseek.com/v1/",
-                modelName = "deepseek-v4-flash",
+                baseUrl = "https://note3-prev-api.askdiandian.com/v1/",
+                modelName = "dots3-note-prev",
                 temperature = 0.0,
+                apiKeyHeader = "api-key",
             ),
         ),
         ModelPreset(

@@ -240,8 +240,13 @@ class LLMRepository(
             } else {
                 null
             },
+            chatTemplateKwargs = if (provider.modelName.isDotsModel()) {
+                ChatTemplateKwargs(enableThinking = false)
+            } else {
+                null
+            },
         )
-        return jsonPost(endpoint, provider.apiKey, json.encodeToString(payload))
+        return jsonPost(endpoint, provider.apiKey, provider.apiKeyHeader, json.encodeToString(payload))
     }
 
     private fun buildResponsesRequest(provider: ProviderConfig, input: QuizInput, localAnswer: String?): Request {
@@ -264,13 +269,20 @@ class LLMRepository(
             stream = true,
             maxOutputTokens = 2048,
         )
-        return jsonPost(endpoint, provider.apiKey, json.encodeToString(payload))
+        return jsonPost(endpoint, provider.apiKey, provider.apiKeyHeader, json.encodeToString(payload))
     }
 
-    private fun jsonPost(endpoint: String, apiKey: String, payload: String): Request =
+    private fun jsonPost(endpoint: String, apiKey: String, apiKeyHeader: String, payload: String): Request =
         Request.Builder()
             .url(endpoint)
-            .header("Authorization", "Bearer $apiKey")
+            .apply {
+                // Dots uses api-key; other OpenAI-compatible providers use Bearer auth.
+                if (apiKeyHeader.equals("api-key", ignoreCase = true)) {
+                    header("api-key", apiKey)
+                } else {
+                    header("Authorization", "Bearer $apiKey")
+                }
+            }
             .header("Accept", "text/event-stream")
             .header("Content-Type", "application/json")
             .post(payload.toRequestBody("application/json".toMediaType()))
@@ -458,6 +470,8 @@ class LLMRepository(
     }
 
     private fun String.isDeepSeekModel(): Boolean = lowercase().contains("deepseek")
+
+    private fun String.isDotsModel(): Boolean = lowercase().contains("dots3-note")
 
     private fun Throwable.isRetryableUpstreamError(): Boolean =
         (this is LlmHttpException && code in setOf(429, 500, 502, 503, 504)) ||

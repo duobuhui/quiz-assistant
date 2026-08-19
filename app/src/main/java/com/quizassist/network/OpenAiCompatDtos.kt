@@ -13,11 +13,17 @@ data class ChatCompletionRequest(
     @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     @SerialName("max_tokens") val maxTokens: Int? = null,
     val thinking: ThinkingConfig? = null,
+    @SerialName("chat_template_kwargs") val chatTemplateKwargs: ChatTemplateKwargs? = null,
 )
 
 @Serializable
 data class ThinkingConfig(
     val type: String,
+)
+
+@Serializable
+data class ChatTemplateKwargs(
+    @SerialName("enable_thinking") val enableThinking: Boolean,
 )
 
 @Serializable
